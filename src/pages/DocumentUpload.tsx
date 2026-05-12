@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useRealtime } from '@/contexts/RealtimeContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -14,6 +15,7 @@ import { backendJson, getApiBaseUrl } from '@/lib/backend-api';
 export default function DocumentUpload() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const { refreshTransactions } = useRealtime();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -287,6 +289,14 @@ export default function DocumentUpload() {
           title: 'Document processed',
           description: `Extracted ${transactionCount} transactions. AI is analyzing your spending patterns to suggest a budget.`
         });
+
+        // Wait a moment for database to complete inserts, then refresh transactions
+        console.log('[DocumentUpload] Waiting for database inserts to complete...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        console.log('[DocumentUpload] Refreshing transactions to ensure Dashboard and other components see the new transactions');
+        await refreshTransactions();
+        console.log('[DocumentUpload] Transactions refreshed');
       } catch (ocrError) {
         console.error('OCR processing failed:', ocrError);
         

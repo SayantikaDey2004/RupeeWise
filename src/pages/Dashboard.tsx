@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,7 +11,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { getActiveBudget, getCurrentMonthSpending, getTotalIncome, getAlerts, createTransaction } from '@/db/api';
+import { getActiveBudget, getCurrentMonthSpending, getTotalIncome, getAlerts, createTransaction, deleteBudget, deleteAllUserData, getTransactions } from '@/db/api';
+import { supabase } from '@/db/supabase';
 import type { Budget, Transaction, Alert as AlertType, TransactionCategory } from '@/types';
 import { CATEGORY_LABELS, CATEGORY_ICONS } from '@/types';
 import { Link } from 'react-router-dom';
@@ -23,13 +24,15 @@ export default function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { transactionPipeline } = useRealtime();
+  const { transactionPipeline, documentPipeline, refreshTransactions } = useRealtime();
   const [budget, setBudget] = useState<Budget | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [totalIncome, setTotalIncome] = useState(0);
   const [alerts, setAlerts] = useState<AlertType[]>([]);
   const [loading, setLoading] = useState(true);
   const [addExpenseOpen, setAddExpenseOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [expenseCategory, setExpenseCategory] = useState<TransactionCategory>('other');
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseDescription, setExpenseDescription] = useState('');
@@ -64,26 +67,143 @@ export default function Dashboard() {
   useEffect(() => {
     if (!user || !transactionPipeline) return;
 
+    console.log('[Dashboard] Setting up transaction listener for user:', user.id);
     const unsubscribe = transactionPipeline.addTransactionListener(async (tx) => {
+      console.log('[Dashboard] Received new transaction via listener:', tx.id, '₹' + tx.amount);
       setTransactions((prev) => {
         if (prev.some((p) => p.id === tx.id)) return prev;
         const next = [tx, ...prev];
         next.sort((a, b) => String(b.transaction_date).localeCompare(String(a.transaction_date)));
+        console.log('[Dashboard] Updated transactions, now have:', next.length, 'total');
         return next;
       });
 
       try {
         const nextAlerts = await getAlerts(user.id, true);
+        console.log('[Dashboard] Fetched updated alerts:', nextAlerts.length);
         setAlerts(nextAlerts);
       } catch {
         // non-fatal
       }
     });
 
+    // More aggressive polling: check every 2 seconds after OCR operations
+    const pollInterval = setInterval(async () => {
+      try {
+        const freshData = await getCurrentMonthSpending(user.id);
+        setTransactions((prev) => {
+          // Always update to latest data from server to ensure consistency
+          const hasNewTransactions = freshData.some(f => !prev.some(p => p.id === f.id));
+          const hasMissingTransactions = prev.some(p => !freshData.some(f => f.id === p.id));
+          
+          if (hasNewTransactions || hasMissingTransactions || freshData.length !== prev.length) {
+            console.log('[Dashboard] Polling detected data change. Had', prev.length, 'now have', freshData.length, 'transactions');
+            return freshData;
+          }
+          return prev;
+        });
+        
+        const freshAlerts = await getAlerts(user.id, true);
+        setAlerts(freshAlerts);
+      } catch (error) {
+        console.error('[Dashboard] Polling error:', error);
+      }
+    }, 2000);  // Increased from 5 seconds to 2 seconds for faster detection
+
     return () => {
+      console.log('[Dashboard] Cleaning up transaction listener and poll');
       unsubscribe();
+      clearInterval(pollInterval);
     };
   }, [user, transactionPipeline]);
+
+  // Listen for document processing completion and refresh transactions immediately
+  useEffect(() => {
+    if (!documentPipeline || !user) return;
+
+    const handleDocumentProcessed = async () => {
+      console.log('[Dashboard] Handling document processing...');
+      try {
+        // Wait a bit more for all database inserts to complete
+        console.log('[Dashboard] Waiting for database to complete all transaction inserts...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Fetch ALL transactions (not just current month) to see any OCR insertions
+        const freshAllTransactions = await getTransactions(user.id);
+        console.log('[Dashboard] Fetched all transactions, found:', freshAllTransactions.length, 'total');
+        
+        // But for Dashboard spending, we still only use current month
+        const freshData = await getCurrentMonthSpending(user.id);
+        console.log('[Dashboard] Current month spending:', freshData.length, 'transactions in this month');
+        
+        setTransactions(freshData);
+        
+        // Fetch fresh alerts
+        const freshAlerts = await getAlerts(user.id, true);
+        console.log('[Dashboard] Fetched fresh alerts:', freshAlerts.length);
+        setAlerts(freshAlerts);
+        
+        console.log('[Dashboard] Dashboard state fully updated with OCR results');
+        
+        // Also trigger an extra poll in 1 second to catch any stragglers
+        setTimeout(async () => {
+          try {
+            const latestData = await getCurrentMonthSpending(user.id);
+            if (latestData.length !== freshData.length) {
+              console.log('[Dashboard] Extra poll detected more transactions, updating again...');
+              setTransactions(latestData);
+              const latestAlerts = await getAlerts(user.id, true);
+              setAlerts(latestAlerts);
+            }
+          } catch (error) {
+            console.error('[Dashboard] Error in extra poll:', error);
+          }
+        }, 1000);
+      } catch (error) {
+        console.error('[Dashboard] Error handling document processing:', error);
+      }
+    };
+
+    console.log('[Dashboard] Adding document processed listener...');
+    const unsubscribe = documentPipeline.addDocumentProcessedListener?.((docId: string) => {
+      console.log('[Dashboard] Document processed event received:', docId);
+      handleDocumentProcessed();
+    });
+
+    // Also set up a direct polling of documents table every 1.5 seconds as backup
+    const documentPollInterval = setInterval(async () => {
+      try {
+        const { data: docs } = await supabase
+          .from('documents')
+          .select('id, processed')
+          .eq('user_id', user.id)
+          .eq('processed', true)
+          .order('created_at', { ascending: false })
+          .limit(5);
+        
+        if (docs && docs.length > 0) {
+          const lastProcessedDoc = docs[0];
+          if (lastProcessedDoc && !window['lastProcessedDocId']) {
+            console.log('[Dashboard] Document polling detected newly processed doc:', lastProcessedDoc.id);
+            window['lastProcessedDocId'] = lastProcessedDoc.id;
+            handleDocumentProcessed();
+          } else if (lastProcessedDoc && lastProcessedDoc.id !== window['lastProcessedDocId']) {
+            console.log('[Dashboard] Document polling detected new processed doc:', lastProcessedDoc.id);
+            window['lastProcessedDocId'] = lastProcessedDoc.id;
+            handleDocumentProcessed();
+          }
+        }
+      } catch (error) {
+        console.error('[Dashboard] Document polling error:', error);
+      }
+    }, 1500);
+
+    return () => {
+      console.log('[Dashboard] Cleaning up document listener and polling');
+      if (unsubscribe) unsubscribe();
+      clearInterval(documentPollInterval);
+    };
+  }, [documentPipeline, user]);
 
   const calculateSpending = () => {
     const spending: Record<string, number> = {};
@@ -92,6 +212,27 @@ export default function Dashboard() {
     });
     return spending;
   };
+
+  // Use useMemo to ensure spending is recalculated whenever transactions change
+  const spending = useMemo(() => {
+    console.log('[Dashboard] Recalculating spending with', transactions.length, 'transactions');
+    return calculateSpending();
+  }, [transactions]);
+
+  // Calculate total spending by category (actual + manual adjustments)
+  const totalSpendingByCategory = useMemo(() => {
+    const result: Record<string, number> = {};
+    Object.keys(CATEGORY_LABELS).forEach((category) => {
+      const actualSpent = spending[category] || 0;
+      const manualAdjustment = manualSpending[category] || 0;
+      result[category] = actualSpent + manualAdjustment;
+    });
+    return result;
+  }, [spending, manualSpending]);
+
+  const totalSpent = useMemo(() => {
+    return Object.values(totalSpendingByCategory).reduce((a, b) => a + b, 0);
+  }, [totalSpendingByCategory]);
 
   const handleAddExpense = async () => {
     if (!user || !expenseAmount || parseFloat(expenseAmount) <= 0) {
@@ -162,19 +303,52 @@ export default function Dashboard() {
     });
   };
 
-  const spending = calculateSpending();
-  
-  // Merge actual spending with manual slider adjustments
-  const totalSpendingByCategory: Record<string, number> = {};
-  Object.keys(CATEGORY_LABELS).forEach((category) => {
-    const actualSpent = spending[category] || 0;
-    const manualAdjustment = manualSpending[category] || 0;
-    totalSpendingByCategory[category] = actualSpent + manualAdjustment;
-  });
+  const handleDeleteBudget = async () => {
+    if (!user || !budget) {
+      toast({
+        title: 'Error',
+        description: 'No budget to delete',
+        variant: 'destructive'
+      });
+      return;
+    }
 
-  const totalSpent = Object.values(totalSpendingByCategory).reduce((a, b) => a + b, 0);
-  const totalBudgeted = budget
-    ? Number(budget.rent) +
+    try {
+      setIsDeleting(true);
+      
+      // Delete budget and all associated data
+      await deleteBudget(budget.id, user.id);
+      await deleteAllUserData(user.id);
+      
+      // Clear all state
+      setBudget(null);
+      setTransactions([]);
+      setAlerts([]);
+      setTotalIncome(0);
+      setManualSpending({});
+      setDeleteDialogOpen(false);
+      
+      toast({
+        title: 'Budget and all data deleted',
+        description: 'Your budget, transactions, and documents have been permanently deleted.'
+      });
+    } catch (error) {
+      console.error('Error deleting budget and data:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to delete budget and data',
+        variant: 'destructive'
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  // Calculate total budgeted amount
+  const totalBudgeted = useMemo(() => {
+    if (!budget) return 0;
+    return (
+      Number(budget.rent) +
       Number(budget.groceries) +
       Number(budget.transport) +
       Number(budget.entertainment) +
@@ -186,10 +360,11 @@ export default function Dashboard() {
       Number(budget.dining) +
       Number(budget.shopping) +
       Number(budget.other)
-    : 0;
+    );
+  }, [budget]);
 
-  const remaining = totalIncome - totalSpent;
-  const budgetUsagePercentage = totalBudgeted > 0 ? (totalSpent / totalBudgeted) * 100 : 0;
+  const remaining = useMemo(() => totalIncome - totalSpent, [totalIncome, totalSpent]);
+  const budgetUsagePercentage = useMemo(() => totalBudgeted > 0 ? (totalSpent / totalBudgeted) * 100 : 0, [totalBudgeted, totalSpent]);
 
   if (loading) {
     return (
@@ -356,8 +531,35 @@ export default function Dashboard() {
       {budget ? (
         <Card>
           <CardHeader>
-            <CardTitle>Budget Breakdown</CardTitle>
-            <p className="text-sm text-muted-foreground">Track your spending with sliders or add expenses manually</p>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Budget Breakdown</CardTitle>
+                <p className="text-sm text-muted-foreground">Track your spending with sliders or add expenses manually</p>
+              </div>
+              <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="destructive" size="sm">
+                    Delete Budget
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Delete Budget and All Data</DialogTitle>
+                    <DialogDescription>
+                      Are you sure you want to delete your entire budget, all transactions, and all uploaded documents? This action cannot be undone. All your financial data will be permanently removed.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setDeleteDialogOpen(false)} disabled={isDeleting}>
+                      Cancel
+                    </Button>
+                    <Button variant="destructive" onClick={handleDeleteBudget} disabled={isDeleting}>
+                      {isDeleting ? 'Deleting All Data...' : 'Delete Everything'}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
           </CardHeader>
           <CardContent className="space-y-6">
             {Object.entries(CATEGORY_LABELS).map(([category, label]) => {

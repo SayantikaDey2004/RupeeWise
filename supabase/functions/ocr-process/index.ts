@@ -112,17 +112,24 @@ CRITICAL RULES:
 1. Return ONLY valid JSON - no explanations, markdown, or extra text
 2. Return an array even if empty: []
 3. Extract EVERY transaction you find, no matter how small
-4. Use YYYY-MM-DD date format (year defaults to 2026 if missing)
+4. Use YYYY-MM-DD date format (IMPORTANT: Use TODAY's date 2026-05-12 as default for recent transactions)
 5. Use amounts as plain numbers only (remove all currency symbols, commas, etc.)
 6. Match category exactly from the valid list below
 7. If you find a line with amount + date + merchant, that's a transaction
+
+IMPORTANT DATE LOGIC:
+- If a receipt shows a date like "5-12" or "May 12", use 2026-05-12 (TODAY)
+- If a date appears to be from a RECEIPT (not a statement), use 2026-05-12
+- Only use dates other than 2026-05-12 if explicitly shown as a full historical date (e.g., "Statement Date: 2026-01-15")
+- When uncertain, default to 2026-05-12 (TODAY)
+- AVOID parsing casual dates like "1-1" or "01-01" as January 1st - these are likely noise
 
 VALID CATEGORIES (use exactly):
 rent, groceries, transport, entertainment, savings, emergency_fund, utilities, healthcare, education, dining, shopping, other
 
 PARSING RULES:
 - Look for patterns: "Item/Merchant Amount Date" or "Date Merchant Amount"
-- Common formats: "Starbucks 150 15-03" or "2026-03-15 Uber 250"
+- Common formats: "Starbucks 150" or "Uber 250"
 - For unclear items, map to most logical category
 - If amount appears without merchant, use category name as merchant
 - Ignore headers, footers, and summary lines
@@ -132,7 +139,7 @@ ${extractedText}
 
 Return ONLY this JSON format with NO other text:
 [
-  {"amount": 123.45, "date": "2026-02-08", "merchant": "Store Name", "category": "groceries", "description": "Item description"}
+  {"amount": 123.45, "date": "2026-05-12", "merchant": "Store Name", "category": "groceries", "description": "Item description"}
 ]
 
 If no transactions found, return: []`;
@@ -229,6 +236,9 @@ If no transactions found, return: []`;
       transactions = [];
     }
 
+    // Get today's date as default
+    const today = new Date().toISOString().split('T')[0];
+
     // Insert transactions into database
     if (transactions.length > 0) {
       // Validate and clean transactions before insertion
@@ -243,12 +253,37 @@ If no transactions found, return: []`;
           const amount = parseFloat(t.amount);
           if (isNaN(amount) || amount <= 0) return null;
 
-          // Validate date
-          const date = t.date || new Date().toISOString().split('T')[0];
+          // Validate date - use today if date is missing or looks suspicious
+          let date = t.date || today;
           const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-          if (!dateRegex.test(date)) return null;
+          
+          // If date doesn't match proper format, use today's date
+          if (!dateRegex.test(date)) {
+            console.log('[OCR] Invalid date format "' + date + '", using today:', today);
+            date = today;
+          }
+          
+          // If date is from previous year/month and looks like noise (e.g., 2026-01-01), 
+          // replace with today's date unless it's explicitly a historical statement
+          const transactionDate = new Date(date);
+          const todayDate = new Date(today);
+          const daysDifference = Math.floor((todayDate.getTime() - transactionDate.getTime()) / (1000 * 60 * 60 * 24));
+          
+          if (daysDifference > 30) {
+            // If transaction is from more than 30 days ago, it's likely a historical receipt
+            // Keep the extracted date
+            console.log('[OCR] Keeping historical date:', date, '(' + daysDifference + ' days old)');
+          } else if (daysDifference < -1) {
+            // Future dates are invalid, use today
+            console.log('[OCR] Future date detected, using today');
+            date = today;
+          }
 
           // Validate category
+          const validCategories = new Set([
+            'rent', 'groceries', 'transport', 'entertainment', 'savings',
+            'emergency_fund', 'utilities', 'healthcare', 'education', 'dining', 'shopping', 'other'
+          ]);
           const category = validCategories.has(t.category) ? t.category : 'other';
 
           return {

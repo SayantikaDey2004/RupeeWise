@@ -414,6 +414,106 @@ export const updateBudget = async (id: string, updates: Partial<Budget>) => {
   return data as Budget;
 };
 
+export const deleteBudget = async (id: string, userId: string) => {
+  for (const key of Object.keys(localStorage)) {
+    if (!key.startsWith(LOCAL_BUDGET_PREFIX)) continue;
+    const budgets = readLocalCollection<Budget>(key);
+    const index = budgets.findIndex((budget) => budget.id === id);
+    if (index === -1) continue;
+
+    budgets.splice(index, 1);
+    writeLocalCollection(key, budgets);
+    
+    // Also delete associated alerts from this budget period
+    const alerts = readLocalCollection<Alert>(getAlertStorageKey(userId));
+    const filteredAlerts = alerts.filter((alert) => {
+      // Remove alerts that are budget-related (budget_80, budget_exceeded)
+      return !['budget_80', 'budget_exceeded'].includes(alert.alert_type);
+    });
+    writeLocalCollection(getAlertStorageKey(userId), filteredAlerts);
+    
+    return;
+  }
+
+  // Delete from Supabase
+  const { error } = await supabase
+    .from('budgets')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', userId);
+  
+  if (error) throw error;
+
+  // Also delete associated alerts from Supabase
+  const { error: alertError } = await supabase
+    .from('alerts')
+    .delete()
+    .eq('user_id', userId)
+    .in('alert_type', ['budget_80', 'budget_exceeded']);
+  
+  if (alertError) throw alertError;
+};
+
+export const deleteAllUserData = async (userId: string) => {
+  // Delete all local storage data for the user
+  const keysToDelete = [];
+  for (const key of Object.keys(localStorage)) {
+    if (key.includes(userId) || key.startsWith(LOCAL_TX_PREFIX) || 
+        key.startsWith(LOCAL_BUDGET_PREFIX) || key.startsWith(LOCAL_INCOME_PREFIX) ||
+        key.startsWith(LOCAL_CHAT_PREFIX) || key.startsWith(LOCAL_ALERT_PREFIX)) {
+      keysToDelete.push(key);
+    }
+  }
+  keysToDelete.forEach(key => localStorage.removeItem(key));
+
+  // Delete all transactions
+  const { error: txError } = await supabase
+    .from('transactions')
+    .delete()
+    .eq('user_id', userId);
+  if (txError) throw txError;
+
+  // Get all documents to delete from storage
+  const { data: documents, error: docFetchError } = await supabase
+    .from('documents')
+    .select('*')
+    .eq('user_id', userId);
+  
+  if (docFetchError) throw docFetchError;
+
+  // Delete documents from storage
+  if (documents && documents.length > 0) {
+    const bucketName = 'app-9hnntffjcnb5_documents_images';
+    for (const doc of documents) {
+      try {
+        const marker = `/storage/v1/object/public/${bucketName}/`;
+        const idx = doc.file_url.indexOf(marker);
+        if (idx !== -1) {
+          const storagePath = doc.file_url.slice(idx + marker.length);
+          const decodedPath = decodeURIComponent(storagePath);
+          await supabase.storage.from(bucketName).remove([decodedPath]);
+        }
+      } catch (error) {
+        console.warn('Error deleting document from storage:', error);
+      }
+    }
+  }
+
+  // Delete all document records
+  const { error: docDeleteError } = await supabase
+    .from('documents')
+    .delete()
+    .eq('user_id', userId);
+  if (docDeleteError) throw docDeleteError;
+
+  // Delete all alerts
+  const { error: alertError } = await supabase
+    .from('alerts')
+    .delete()
+    .eq('user_id', userId);
+  if (alertError) throw alertError;
+};
+
 // Document operations
 export const getDocuments = async (userId: string) => {
   const { data, error } = await supabase

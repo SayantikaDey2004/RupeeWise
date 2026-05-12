@@ -101,6 +101,7 @@ function getAdvisorMode(lowerMessage: string):
   | 'savings_plan'
   | 'reduce_spending'
   | 'income_summary'
+  | 'cost_of_living'
   | 'default' {
   if (lowerMessage.includes('income') || lowerMessage.includes('salary') || lowerMessage.includes('earning')) {
     return 'income_summary';
@@ -116,6 +117,10 @@ function getAdvisorMode(lowerMessage: string):
   }
   if (lowerMessage.includes('spent') || lowerMessage.includes('spend') || lowerMessage.includes('expense')) {
     return 'spend_by_category';
+  }
+  if (lowerMessage.includes('living expense') || lowerMessage.includes('cost of living') || 
+      lowerMessage.includes('monthly expense') || lowerMessage.includes('expenses in ')) {
+    return 'cost_of_living';
   }
   return 'default';
 }
@@ -133,30 +138,107 @@ function buildAdvisorHeader(totalIncome: number, spentThisMonth: number, remaini
   ].join('\n');
 }
 
+function getSpecificExpenseSuggestions(category: string): string[] {
+  const suggestions: Record<string, string[]> = {
+    dining: [
+      '🍽️ Cook at home instead of ordering delivery - saves ~40-50%',
+      '👥 Plan weekly meals to avoid impulse food orders',
+      '💳 Set daily food budget limit of ₹300-500'
+    ],
+    transport: [
+      '🚌 Use public transport (bus/metro) instead of taxis - saves ~60%',
+      '🚴 Walk or cycle for nearby destinations',
+      '📍 Plan trips efficiently to reduce overall journeys'
+    ],
+    shopping: [
+      '🛍️ Create a shopping list and stick to it',
+      '⏰ Wait 3 days before buying non-essentials',
+      '💰 Use cashback apps and compare prices before purchase'
+    ],
+    entertainment: [
+      '🎬 Use free entertainment options (parks, community events)',
+      '💻 Prioritize streaming subscriptions - keep only 1-2',
+      '🎮 Enjoy hobbies at home instead of paid outings'
+    ],
+    utilities: [
+      '💡 Switch to LED bulbs and unplug devices',
+      '🚿 Use cold water for laundry when possible',
+      '📱 Negotiate better phone/internet plans annually'
+    ],
+    groceries: [
+      '🛒 Buy generic/store brands instead of premium',
+      '📊 Buy in bulk for staple items',
+      '🌾 Reduce meat consumption - try 2-3 vegetarian days'
+    ],
+    healthcare: [
+      '💊 Take preventive care steps to reduce medical visits',
+      '🏥 Use generic medicines instead of branded',
+      '🧘 Practice home remedies for minor illnesses'
+    ],
+    education: [
+      '📚 Use free online courses instead of paid ones',
+      '🎓 Share learning resources with friends',
+      '⏱️ Learn during free time instead of paid workshops'
+    ],
+    rent: [
+      '🏠 Negotiate rent reduction annually (if possible)',
+      '👥 Consider roommate to share rent',
+      '📍 Look for slightly farther but cheaper locations'
+    ]
+  };
+  return suggestions[category] || [];
+}
+
 function topRecommendations(insights: CategoryInsight[], remaining: number): string {
-  const lines: string[] = ['### Recommended Actions'];
+  const lines: string[] = ['### 💡 Expense Reduction Tips'];
 
   const over = insights.filter((i) => i.status === 'over').slice(0, 2);
   const warning = insights.filter((i) => i.status === 'warning').slice(0, 2);
 
   if (over.length > 0) {
     over.forEach((item) => {
-      lines.push(`- ${item.label}: reduce by at least **${formatCurrency(Math.abs(item.remaining))}** to recover budget control.`);
+      const potentialSavings = Math.abs(item.remaining);
+      const suggestions = getSpecificExpenseSuggestions(item.category);
+      lines.push(`\n**🔴 ${item.label} - OVER BUDGET**`);
+      lines.push(`- Need to reduce by: **${formatCurrency(potentialSavings)}** (Currently at ${item.percentUsed.toFixed(0)}% of budget)`);
+      if (suggestions.length > 0) {
+        lines.push(`- ${suggestions[0]}`);
+        if (suggestions.length > 1) lines.push(`- ${suggestions[1]}`);
+      }
     });
   }
 
   if (warning.length > 0) {
     warning.forEach((item) => {
-      lines.push(`- ${item.label}: only **${formatCurrency(item.remaining)}** left, switch to low-spend mode for this category.`);
+      const suggestions = getSpecificExpenseSuggestions(item.category);
+      lines.push(`\n**🟡 ${item.label} - WARNING**`);
+      lines.push(`- Only **${formatCurrency(item.remaining)}** remaining (at ${item.percentUsed.toFixed(0)}%)`);
+      if (suggestions.length > 0) {
+        lines.push(`- ${suggestions[0]}`);
+      }
     });
   }
 
   if (over.length === 0 && warning.length === 0) {
-    lines.push('- Your budget is healthy; keep tracking daily expenses and avoid unplanned spends.');
+    const allSpending = insights.slice(0, 2);
+    if (allSpending.length > 0) {
+      lines.push(`\n**🟢 Budget is Healthy - Optimization Tips:**`);
+      allSpending.forEach(item => {
+        const suggestions = getSpecificExpenseSuggestions(item.category);
+        if (suggestions.length > 0) {
+          lines.push(`- ${item.label}: ${suggestions[0]}`);
+        }
+      });
+    } else {
+      lines.push('- Your budget is healthy; keep tracking daily expenses and avoid unplanned spends.');
+    }
   }
 
   if (remaining > 0) {
-    lines.push(`- Move **${formatCurrency(Math.max(0, remaining * 0.2))}** into savings/emergency reserve this cycle.`);
+    const savingsTarget = Math.max(0, remaining * 0.2);
+    lines.push(`\n**💰 Savings Goal**`);
+    lines.push(`- Move **${formatCurrency(savingsTarget)}** into savings this month`);
+    lines.push(`- This leaves you with **${formatCurrency(remaining - savingsTarget)}** for unexpected expenses`);
   }
 
   return lines.join('\n');
@@ -252,6 +334,8 @@ ${topRecommendations(insights, remaining)}`;
     const amount = categorySpent[matchedCategory] || 0;
     const label = CATEGORY_LABELS[matchedCategory as keyof typeof CATEGORY_LABELS] || matchedCategory;
     const matchedInsight = insights.find((item) => item.category === matchedCategory);
+    const suggestions = getSpecificExpenseSuggestions(matchedCategory);
+    const potentialSavings = amount * 0.2;
 
     return `${header}
 
@@ -260,6 +344,7 @@ ${topRecommendations(insights, remaining)}`;
 ${matchedInsight ? `- Budget: **${formatCurrency(matchedInsight.budgeted)}**` : '- Budget: **Not allocated**'}
 ${matchedInsight ? `- Remaining: **${formatCurrency(matchedInsight.remaining)}**` : '- Remaining: **Not available**'}
 
+${suggestions.length > 0 ? `### 💡 Smart Spending Tips for ${label}\n${suggestions.map(s => `- ${s}`).join('\n')}\n\n**Potential Savings:** ₹${potentialSavings.toFixed(2)} if you reduce spending by 20%\n` : ''}
 ${topRecommendations(matchedInsight ? [matchedInsight] : insights.slice(0, 2), remaining)}`;
   }
 
@@ -276,24 +361,107 @@ ${topRecommendations(matchedInsight ? [matchedInsight] : insights.slice(0, 2), r
 ${topRecommendations(insights, remaining)}`;
   }
 
+  if (mode === 'cost_of_living') {
+    // Extract city name from message
+    const cityPatterns = ['bangalore', 'bengaluru', 'mumbai', 'delhi', 'ncr', 'pune', 'hyderabad', 'kolkata', 'chennai', 'ahmedabad', 'jaipur', 'lucknow', 'chandigarh', 'gurgaon', 'noida'];
+    const detectedCity = cityPatterns.find(city => lowerMessage.includes(city)) || 'bangalore';
+    
+    const costOfLivingData: Record<string, { rent: number; groceries: number; dining: number; transport: number; utilities: number; entertainment: number }> = {
+      bangalore: { rent: 12000, groceries: 3000, dining: 4000, transport: 1500, utilities: 1200, entertainment: 2000 },
+      bengaluru: { rent: 12000, groceries: 3000, dining: 4000, transport: 1500, utilities: 1200, entertainment: 2000 },
+      mumbai: { rent: 15000, groceries: 3500, dining: 4500, transport: 2000, utilities: 1500, entertainment: 2500 },
+      delhi: { rent: 10000, groceries: 2800, dining: 3500, transport: 1200, utilities: 1000, entertainment: 1800 },
+      ncr: { rent: 10000, groceries: 2800, dining: 3500, transport: 1200, utilities: 1000, entertainment: 1800 },
+      pune: { rent: 9000, groceries: 2700, dining: 3200, transport: 1000, utilities: 900, entertainment: 1600 },
+      hyderabad: { rent: 8500, groceries: 2500, dining: 3000, transport: 1000, utilities: 900, entertainment: 1500 },
+      kolkata: { rent: 7500, groceries: 2300, dining: 2800, transport: 800, utilities: 800, entertainment: 1400 },
+      chennai: { rent: 8000, groceries: 2400, dining: 2900, transport: 900, utilities: 900, entertainment: 1500 },
+      ahmedabad: { rent: 7000, groceries: 2200, dining: 2600, transport: 800, utilities: 800, entertainment: 1400 },
+      jaipur: { rent: 6500, groceries: 2000, dining: 2400, transport: 700, utilities: 700, entertainment: 1200 },
+      lucknow: { rent: 5500, groceries: 1800, dining: 2200, transport: 600, utilities: 600, entertainment: 1000 },
+      chandigarh: { rent: 7000, groceries: 2200, dining: 2600, transport: 800, utilities: 800, entertainment: 1400 },
+      gurgaon: { rent: 13000, groceries: 3200, dining: 4000, transport: 1500, utilities: 1200, entertainment: 2200 },
+      noida: { rent: 9000, groceries: 2700, dining: 3200, transport: 1000, utilities: 900, entertainment: 1600 }
+    };
+    
+    const cityData = costOfLivingData[detectedCity] || costOfLivingData.bangalore;
+    const totalMonthly = Object.values(cityData).reduce((sum, val) => sum + val, 0);
+    const comfortable = totalMonthly * 1.3;
+    const withSavings = totalMonthly * 1.6;
+    
+    const cityDisplay = detectedCity.charAt(0).toUpperCase() + detectedCity.slice(1);
+    
+    return `${header}
+
+### 📍 Cost of Living in ${cityDisplay}
+
+#### Essential Monthly Expenses (Budget-Conscious Living)
+- **Rent:** ₹${cityData.rent.toLocaleString('en-IN')}
+- **Groceries:** ₹${cityData.groceries.toLocaleString('en-IN')}
+- **Dining/Food Delivery:** ₹${cityData.dining.toLocaleString('en-IN')}
+- **Transport:** ₹${cityData.transport.toLocaleString('en-IN')}
+- **Utilities (Electricity, Water, Internet):** ₹${cityData.utilities.toLocaleString('en-IN')}
+- **Entertainment/Misc:** ₹${cityData.entertainment.toLocaleString('en-IN')}
+
+#### Budget Categories
+- **Minimum Living:** ₹${totalMonthly.toLocaleString('en-IN')}/month
+- **Comfortable Living:** ₹${Math.round(comfortable).toLocaleString('en-IN')}/month (with buffer)
+- **With Savings (20%):** ₹${Math.round(withSavings).toLocaleString('en-IN')}/month
+
+#### Budget Tips for ${cityDisplay}
+- 💰 Share apartment/rent to reduce housing costs by 30-40%
+- 🍽️ Avoid daily dining out - save ₹${(cityData.dining * 0.6).toFixed(0)} by cooking at home
+- 🚌 Use public transport monthly passes instead of daily tickets
+- 🏠 Negotiate internet/mobile plans - often give 20-30% discounts for annual plans
+- 💡 Use LED bulbs and schedule appliances to reduce electricity bills
+
+#### How Does This Compare to Your Current Spending?
+Your current spending: **₹${spentThisMonth.toFixed(2)}/month**
+${spentThisMonth > totalMonthly ? `⚠️ You're spending **₹${(spentThisMonth - totalMonthly).toFixed(0)}** more than typical for ${cityDisplay}` : `✅ You're spending **₹${(totalMonthly - spentThisMonth).toFixed(0)}** less than typical for ${cityDisplay} - great job!`}`;
+  }
+
   if (mode === 'reduce_spending') {
-    const highestSpend = Object.entries(categorySpent)
+    const topSpending = Object.entries(categorySpent)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([cat, amt]) => `- ${(CATEGORY_LABELS[cat as keyof typeof CATEGORY_LABELS] || cat)}: **${formatCurrency(amt)}**`)
+      .slice(0, 3);
+    
+    const topSpendingText = topSpending
+      .map(([cat, amt]) => {
+        const catLabel = CATEGORY_LABELS[cat as keyof typeof CATEGORY_LABELS] || cat;
+        const tenPercentSavings = amt * 0.1;
+        const twentyPercentSavings = amt * 0.2;
+        return `- **${catLabel}**: ₹${amt.toFixed(2)} → Can save **₹${tenPercentSavings.toFixed(2)}-${twentyPercentSavings.toFixed(2)}** (10-20% reduction)`;
+      })
       .join('\n');
+    
+    const totalTopThreeSavingsPotential = topSpending.reduce((sum, [_, amt]) => sum + (amt * 0.15), 0);
+
+    const detailedTips = topSpending
+      .map(([cat]) => {
+        const suggestions = getSpecificExpenseSuggestions(cat);
+        if (suggestions.length > 0) {
+          return `#### ${CATEGORY_LABELS[cat as keyof typeof CATEGORY_LABELS] || cat} Savings Ideas\n${suggestions.slice(0, 2).map(s => `- ${s}`).join('\n')}`;
+        }
+        return '';
+      })
+      .filter(tip => tip.length > 0)
+      .join('\n\n');
 
     return `${header}
 
-### Where To Cut First
-${highestSpend || '- No spending data found yet.'}
+### 🎯 Top 3 Expense Categories
+${topSpendingText || '- No spending data found yet.'}
 
-### 7-Day Control Plan
-- Day 1: Freeze non-essential purchases.
-- Day 2-3: Cap food-delivery/dining spends.
-- Day 4-5: Shift upcoming purchases to lower-cost alternatives.
-- Day 6-7: Review progress and rebalance category caps.
+**Potential Monthly Savings: ₹${totalTopThreeSavingsPotential.toFixed(2)}** if you reduce each by 15%
 
+### 7-Day Expense Control Challenge
+**Day 1:** Identify your top 3 spending categories (above)
+**Day 2-3:** Cut dining/delivery by 20% - cook 3 meals at home
+**Day 4-5:** Use public transport instead of cabs - save on transport
+**Day 6-7:** Pause non-essential shopping, focus on planned purchases only
+**End of Week:** Track savings and celebrate progress! 🎉
+
+${detailedTips ? `### Category-Specific Saving Strategies\n${detailedTips}\n` : ''}
 ${topRecommendations(insights, remaining)}`;
   }
 

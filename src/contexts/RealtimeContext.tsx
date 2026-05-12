@@ -24,6 +24,7 @@ interface RealtimeContextType {
   isActive: boolean;
   recentAnomalies: AnomalyResult[];
   recentAlerts: BudgetAlert[];
+  refreshTransactions: () => Promise<void>;
 }
 
 const RealtimeContext = createContext<RealtimeContextType>({
@@ -32,7 +33,8 @@ const RealtimeContext = createContext<RealtimeContextType>({
   documentPipeline: null,
   isActive: false,
   recentAnomalies: [],
-  recentAlerts: []
+  recentAlerts: [],
+  refreshTransactions: async () => {}
 });
 
 export const useRealtime = () => useContext(RealtimeContext);
@@ -67,7 +69,7 @@ export function RealtimeProvider({ children }: RealtimeProviderProps) {
 
     // Set up transaction pipeline with callbacks
     const transactionPipeline = processingManager.getTransactionPipeline();
-    transactionPipeline.onTransaction = (transaction: Transaction) => {
+    transactionPipeline.onTransaction = (_transaction: Transaction) => {
       // Optional: Show toast for new transactions
       // Disabled by default to avoid notification spam
     };
@@ -109,14 +111,14 @@ export function RealtimeProvider({ children }: RealtimeProviderProps) {
 
     // Set up budget pipeline
     const budgetPipeline = processingManager.getBudgetPipeline();
-    budgetPipeline.onBudgetUpdate = (budget: Budget) => {
+    budgetPipeline.onBudgetUpdate = (_budget: Budget) => {
       // Optional: Handle budget updates
       // Could trigger dashboard refresh or show notification
     };
 
     // Set up document pipeline
     const documentPipeline = processingManager.getDocumentPipeline();
-    documentPipeline.onDocumentProcessed = (documentId: string) => {
+    documentPipeline.onDocumentProcessed = (_documentId: string) => {
       toast({
         title: '✅ Document Processed',
         description: 'Transactions have been extracted and added to your account.',
@@ -142,7 +144,12 @@ export function RealtimeProvider({ children }: RealtimeProviderProps) {
         documentPipeline: manager?.getDocumentPipeline() || null,
         isActive,
         recentAnomalies,
-        recentAlerts
+        recentAlerts,
+        refreshTransactions: async () => {
+          if (manager) {
+            await manager.getTransactionPipeline().refreshRecentTransactions();
+          }
+        }
       }}
     >
       {children}

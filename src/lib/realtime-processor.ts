@@ -99,6 +99,35 @@ export class TransactionPipeline implements ProcessingPipeline {
     };
   }
 
+  async refreshRecentTransactions() {
+    // Fetch recent transactions and emit them to all listeners
+    // Useful after OCR processing to ensure UI components are notified
+    try {
+      console.log('[TransactionPipeline] Refreshing recent transactions for user:', this.userId);
+      const { data: transactions } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('user_id', this.userId)
+        .order('transaction_date', { ascending: false })
+        .limit(100);
+
+      if (transactions && transactions.length > 0) {
+        console.log('[TransactionPipeline] Found', transactions.length, 'transactions to refresh');
+        // Emit all recent transactions to ensure listeners are updated
+        // This is aggressive but ensures everything is synchronized
+        for (const tx of transactions) {
+          const transaction = tx as Transaction;
+          console.log('[TransactionPipeline] Emitting transaction:', transaction.id, transaction.amount, transaction.category);
+          this.emitTransaction(transaction);
+        }
+      } else {
+        console.log('[TransactionPipeline] No transactions found during refresh');
+      }
+    } catch (error) {
+      console.error('[TransactionPipeline] Error refreshing transactions:', error);
+    }
+  }
+
   addAnomalyListener(listener: (anomaly: AnomalyResult) => void) {
     this.anomalyListeners.add(listener);
     return () => {
@@ -118,10 +147,12 @@ export class TransactionPipeline implements ProcessingPipeline {
     // Example env var: VITE_KAFKA_TRANSACTIONS_SSE_URL=https://your-api/transactions/stream
     const kafkaSseUrl = import.meta.env['VITE_KAFKA_TRANSACTIONS_SSE_URL'] as string | undefined;
     if (kafkaSseUrl) {
+      console.log('[TransactionPipeline] Subscribing to Kafka SSE:', kafkaSseUrl);
       this.subscribeKafkaSse(kafkaSseUrl);
       return;
     }
 
+    console.log('[TransactionPipeline] Subscribing to Supabase real-time for user:', this.userId);
     // Subscribe to real-time transaction inserts
     this.channel = supabase
       .channel(`transactions:${this.userId}`)
@@ -134,11 +165,14 @@ export class TransactionPipeline implements ProcessingPipeline {
           filter: `user_id=eq.${this.userId}`
         },
         async (payload) => {
+          console.log('[TransactionPipeline] Received new transaction via real-time:', payload.new);
           const transaction = payload.new as Transaction;
           await this.handleIncomingTransaction(transaction);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('[TransactionPipeline] Subscription status:', status);
+      });
   }
 
   unsubscribe() {
@@ -360,7 +394,7 @@ export class TransactionPipeline implements ProcessingPipeline {
     return null;
   }
 
-  private async updateStatistics(transaction: Transaction) {
+  private async updateStatistics(_transaction: Transaction) {
     // This could be expanded to update aggregated statistics tables
     // For now, we rely on real-time queries
     // Future: Could implement materialized views or summary tables
@@ -421,6 +455,7 @@ export class DocumentProcessingPipeline implements ProcessingPipeline {
   private userId: string;
   private channel: any;
   public onDocumentProcessed?: (documentId: string) => void;
+  private documentProcessedListeners = new Set<(documentId: string) => void>();
 
   constructor(
     userId: string,
@@ -430,6 +465,13 @@ export class DocumentProcessingPipeline implements ProcessingPipeline {
   ) {
     this.userId = userId;
     this.onDocumentProcessed = callbacks?.onDocumentProcessed;
+  }
+
+  addDocumentProcessedListener(listener: (documentId: string) => void) {
+    this.documentProcessedListeners.add(listener);
+    return () => {
+      this.documentProcessedListeners.delete(listener);
+    };
   }
 
   subscribe() {
@@ -445,12 +487,29 @@ export class DocumentProcessingPipeline implements ProcessingPipeline {
         },
         (payload) => {
           const doc = payload.new as any;
-          if (doc.processed && this.onDocumentProcessed) {
-            this.onDocumentProcessed(doc.id);
+          console.log('[DocumentProcessingPipeline] Received document UPDATE event:', doc.id, 'processed:', doc.processed);
+          if (doc.processed) {
+            console.log('[DocumentProcessingPipeline] Document marked as processed:', doc.id);
+            // Call the callback
+            if (this.onDocumentProcessed) {
+              console.log('[DocumentProcessingPipeline] Calling onDocumentProcessed callback');
+              this.onDocumentProcessed(doc.id);
+            }
+            // Emit to all listeners
+            console.log('[DocumentProcessingPipeline] Notifying', this.documentProcessedListeners.size, 'listeners');
+            this.documentProcessedListeners.forEach((listener) => {
+              try {
+                listener(doc.id);
+              } catch (error) {
+                console.error('[DocumentProcessingPipeline] Error calling listener:', error);
+              }
+            });
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('[DocumentProcessingPipeline] Subscription status changed:', status);
+      });
   }
 
   unsubscribe() {
