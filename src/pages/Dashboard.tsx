@@ -19,6 +19,7 @@ import { Link } from 'react-router-dom';
 import { AlertCircle, TrendingUp, TrendingDown, IndianRupee, Target, Plus, CreditCard } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useRealtime } from '@/contexts/RealtimeContext';
+import ExpenseAnalytics from '@/components/ExpenseAnalytics';
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -526,6 +527,9 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Expense Analytics Charts */}
+      <ExpenseAnalytics transactions={transactions} />
 
       {/* Budget Breakdown */}
       {budget ? (
