@@ -531,14 +531,14 @@ export default function Dashboard() {
       {budget ? (
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="flex-1">
                 <CardTitle>Budget Breakdown</CardTitle>
                 <p className="text-sm text-muted-foreground">Track your spending with sliders or add expenses manually</p>
               </div>
               <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="destructive" size="sm">
+                  <Button variant="destructive" size="sm" className="w-full sm:w-auto">
                     Delete Budget
                   </Button>
                 </DialogTrigger>

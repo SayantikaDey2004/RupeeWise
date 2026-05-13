@@ -139,3 +139,44 @@ We're a team passionate about:
 ---
 
 *Made with ❤️ for India 🇮🇳*
+
+
+
+📝 Winning Description
+RupeeWise is an AI-powered personal and family finance assistant built for India. It combines real transaction tracking, budget planning, document OCR, and a finance-only chatbot into a single platform, backed by real-time streaming pipelines and secure Supabase storage. Users can simulate payments, receive instant budget updates, and ask the AI about spending patterns, all in Indian Rupees and with family finance built in from day one.
+
+🎤 Hackathon Winning Speech
+Opening
+“How many of you track every single rupee you spend? Almost no one. That’s the problem we are solving.”
+
+The Problem
+Most Indian users don’t track expenses consistently.
+Existing apps are too generic, dollar-focused, or complicated.
+Family spending is especially messy in joint households.
+People want clarity, not another spreadsheet.
+Our Solution
+RupeeWise gives India a finance app designed for Indian money habits:
+
+AI assistant that answers questions like “How much did I spend on groceries?”
+Real-time budget updates from payments
+Document upload + OCR to extract receipts automatically
+Family and personal finance in one dashboard
+Why it wins
+Built for India: ₹ currency, UPI-style payments, Indian merchants/categories
+AI-powered: finance-first assistant with real spending context
+Real-time: instant transaction processing and anomaly alerts
+Full-stack innovation: React frontend, FastAPI backend, Kafka streaming, MongoDB
+Tech architecture
+Frontend: React + Vite + Tailwind
+Backend: FastAPI + Kafka + Pathway Engine
+AI: Gemini + RAG
+Database: MongoDB with realtime sync
+Close
+“RupeeWise is not just another budget app. It is the first Indian finance assistant that understands your money, your family, and your real-time spending. Let’s make every rupee count.”
+
+💡 Notes
+There is already a strong existing pitch in HACKATHON_PITCH.md that matches the product well.
+If you want, I can also turn this into:
+a demo script
+a slide deck outline
+a shorter 90-second investor pitch
