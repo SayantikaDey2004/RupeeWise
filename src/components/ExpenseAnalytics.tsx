@@ -1,7 +1,9 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
+  AreaChart,
+  Area,
   BarChart,
   Bar,
   LineChart,
@@ -15,12 +17,13 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  PieChart as RechartsChart,
+  RadialBarChart,
+  RadialBar,
+  PolarAngleAxis,
 } from 'recharts';
-import { ChartContainer, ChartTooltip } from '@/components/ui/chart';
 import type { Transaction } from '@/types';
 import { CATEGORY_LABELS } from '@/types';
-import { format, isToday, startOfMonth, endOfMonth, startOfYear, endOfYear, isWithinInterval, subYears, isWithinInterval as dateIsWithinInterval } from 'date-fns';
+import { format, startOfMonth, endOfMonth, startOfYear, endOfYear, isWithinInterval, subDays } from 'date-fns';
 
 const COLORS = [
   '#3b82f6', // blue
@@ -37,24 +40,6 @@ const COLORS = [
   '#0ea5e9', // sky
 ];
 
-interface DailyExpense {
-  date: string;
-  amount: number;
-  displayDate: string;
-}
-
-interface ExpenseByCategory {
-  name: string;
-  value: number;
-  fill: string;
-}
-
-interface YearComparisonData {
-  date: string;
-  thisYear: number;
-  lastYear: number;
-  displayDate: string;
-}
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
@@ -121,7 +106,6 @@ export default function ExpenseAnalytics({ transactions }: ExpenseAnalyticsProps
     const today = new Date();
     const currentYear = today.getFullYear();
     const currentMonth = today.getMonth();
-    const currentDate = today.getDate();
     
     const daysByMonth: Record<string, { thisYear: number; lastYear: number }> = {};
 
@@ -160,6 +144,33 @@ export default function ExpenseAnalytics({ transactions }: ExpenseAnalyticsProps
       displayDate: month,
       thisYear: parseFloat(data.thisYear.toFixed(2)),
       lastYear: parseFloat(data.lastYear.toFixed(2)),
+    }));
+  }, [transactions]);
+
+  const dailyPulse = useMemo(() => {
+    const today = new Date();
+    const start = subDays(today, 13);
+    const dayBuckets: Record<string, number> = {};
+
+    for (let i = 13; i >= 0; i--) {
+      const day = subDays(today, i);
+      const key = format(day, 'MMM dd');
+      dayBuckets[key] = 0;
+    }
+
+    transactions.forEach((tx) => {
+      const txDate = new Date(tx.transaction_date);
+      if (isWithinInterval(txDate, { start, end: today })) {
+        const key = format(txDate, 'MMM dd');
+        if (key in dayBuckets) {
+          dayBuckets[key] += Number(tx.amount);
+        }
+      }
+    });
+
+    return Object.entries(dayBuckets).map(([date, amount]) => ({
+      date,
+      amount,
     }));
   }, [transactions]);
 
@@ -342,6 +353,26 @@ export default function ExpenseAnalytics({ transactions }: ExpenseAnalyticsProps
   const totalMonthly = monthlyCategoryBreakdown.reduce((sum, item) => sum + item.value, 0);
   const totalYearly = yearlyCategoryBreakdown.reduce((sum, item) => sum + item.value, 0);
 
+  const monthlyCategoryCards = useMemo(() => {
+    return monthlyCategoryBreakdown.map((item) => {
+      const percent = totalMonthly > 0 ? (item.value / totalMonthly) * 100 : 0;
+      return {
+        ...item,
+        percent: Number(percent.toFixed(1)),
+      };
+    });
+  }, [monthlyCategoryBreakdown, totalMonthly]);
+
+  const yearlyCategoryCards = useMemo(() => {
+    return yearlyCategoryBreakdown.map((item) => {
+      const percent = totalYearly > 0 ? (item.value / totalYearly) * 100 : 0;
+      return {
+        ...item,
+        percent: Number(percent.toFixed(1)),
+      };
+    });
+  }, [yearlyCategoryBreakdown, totalYearly]);
+
   const getChartData = () => {
     switch (period) {
       case 'monthly':
@@ -381,6 +412,52 @@ export default function ExpenseAnalytics({ transactions }: ExpenseAnalyticsProps
 
   return (
     <div className="space-y-6">
+      <Card className="border-none shadow-lg floating-card overflow-hidden">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <CardTitle>Daily Pulse</CardTitle>
+              <p className="text-sm text-muted-foreground">Last 14 days spending rhythm</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">14-Day Total</p>
+              <p className="text-2xl font-bold">
+                ₹{dailyPulse.reduce((sum, item) => sum + item.amount, 0).toFixed(2)}
+              </p>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="relative h-64">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.14),_transparent_55%)]" />
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={dailyPulse} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="pulseGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis dataKey="date" tick={{ fill: 'currentColor', fontSize: 12 }} axisLine={false} />
+                <YAxis tick={{ fill: 'currentColor', fontSize: 12 }} axisLine={false} />
+                <Tooltip content={<CustomTooltip />} />
+                <Area
+                  type="monotone"
+                  dataKey="amount"
+                  stroke="#3b82f6"
+                  strokeWidth={2.5}
+                  fill="url(#pulseGradient)"
+                  dot={{ r: 2.5, strokeWidth: 1.5, fill: '#3b82f6' }}
+                  activeDot={{ r: 5 }}
+                  animationDuration={500}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </CardContent>
+      </Card>
+
       <Tabs value={period} onValueChange={(value) => setPeriod(value as any)} className="w-full">
         <TabsList className="grid w-full grid-cols-3 bg-muted/50 rounded-lg p-1">
           <TabsTrigger value="daily" className="rounded-md">
@@ -480,23 +557,27 @@ export default function ExpenseAnalytics({ transactions }: ExpenseAnalyticsProps
             <CardContent>
               <div className="space-y-3 max-h-72 overflow-y-auto">
                 {categoryData.length > 0 ? (
-                  categoryData.map((item) => (
-                    <div key={item.name} className="flex items-center justify-between text-sm">
-                      <div className="flex items-center gap-2 flex-1">
-                        <div
-                          className="w-3 h-3 rounded-full"
-                          style={{ backgroundColor: item.fill }}
-                        />
-                        <span className="font-medium truncate">{item.name}</span>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-semibold">₹{item.value.toFixed(2)}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {((item.value / getTotalExpenses()) * 100).toFixed(0)}%
+                  categoryData.map((item) => {
+                    const totalForPercent = getTotalExpenses();
+                    const percent = totalForPercent > 0 ? (item.value / totalForPercent) * 100 : 0;
+                    return (
+                      <div key={item.name} className="flex items-center justify-between text-sm">
+                        <div className="flex items-center gap-2 flex-1">
+                          <div
+                            className="w-3 h-3 rounded-full"
+                            style={{ backgroundColor: item.fill }}
+                          />
+                          <span className="font-medium truncate">{item.name}</span>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-semibold">₹{item.value.toFixed(2)}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {percent.toFixed(0)}%
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 ) : (
                   <p className="text-sm text-muted-foreground">No expenses in this category</p>
                 )}
@@ -551,6 +632,98 @@ export default function ExpenseAnalytics({ transactions }: ExpenseAnalyticsProps
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{item.name}</p>
                       <p className="text-xs text-muted-foreground">₹{item.value.toFixed(2)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {monthlyCategoryCards.length > 0 && (
+          <Card className="border-none shadow-lg floating-card mt-6">
+            <CardHeader className="pb-3">
+              <CardTitle>Monthly Category Spotlight</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Every category gets its own chart for this month
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {monthlyCategoryCards.map((item) => (
+                  <div key={`monthly-${item.name}`} className="rounded-xl border border-border/50 bg-muted/30 p-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-semibold truncate">{item.name}</h4>
+                      <span className="text-xs text-muted-foreground">{item.percent}%</span>
+                    </div>
+                    <div className="mt-3 flex items-center gap-4">
+                      <div className="h-20 w-20">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={[
+                                { name: 'Spent', value: item.value },
+                                { name: 'Other', value: Math.max(totalMonthly - item.value, 0) },
+                              ]}
+                              innerRadius={26}
+                              outerRadius={38}
+                              paddingAngle={2}
+                              dataKey="value"
+                              stroke="none"
+                            >
+                              <Cell fill={item.fill} />
+                              <Cell fill="#e5e7eb" />
+                            </Pie>
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Monthly spend</p>
+                        <p className="text-lg font-bold">₹{item.value.toFixed(2)}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {yearlyCategoryCards.length > 0 && (
+          <Card className="border-none shadow-lg floating-card mt-6">
+            <CardHeader className="pb-3">
+              <CardTitle>Yearly Category Spotlight</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Full-year category impact with radial arcs
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {yearlyCategoryCards.map((item) => (
+                  <div key={`yearly-${item.name}`} className="rounded-xl border border-border/50 bg-muted/30 p-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-semibold truncate">{item.name}</h4>
+                      <span className="text-xs text-muted-foreground">{item.percent}%</span>
+                    </div>
+                    <div className="mt-3 flex items-center gap-4">
+                      <div className="h-20 w-20">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <RadialBarChart
+                            innerRadius="70%"
+                            outerRadius="100%"
+                            data={[{ name: item.name, value: item.percent }]}
+                            startAngle={90}
+                            endAngle={-270}
+                          >
+                            <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
+                            <RadialBar dataKey="value" cornerRadius={8} fill={item.fill} />
+                          </RadialBarChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Yearly spend</p>
+                        <p className="text-lg font-bold">₹{item.value.toFixed(2)}</p>
+                      </div>
                     </div>
                   </div>
                 ))}
